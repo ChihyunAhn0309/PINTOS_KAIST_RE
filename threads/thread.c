@@ -11,6 +11,9 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "list.h"
+#include "threads/fixed-point.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -27,6 +30,12 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
+
+/* List of threads which waiting for the timer_sleep */
+static struct list waiting_list;
+
+/* List of all threads which are made and not exit */
+static struct list total_list;
 
 /* Idle thread. */
 static struct thread *idle_thread;
@@ -53,6 +62,7 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+int load_avg;
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -108,6 +118,8 @@ thread_init (void) {
 	/* Init the globla thread context */
 	lock_init (&tid_lock);
 	list_init (&ready_list);
+	list_init (&waiting_list);
+	list_init (&total_list);
 	list_init (&destruction_req);
 
 	/* Set up a thread structure for the running thread. */
@@ -115,6 +127,8 @@ thread_init (void) {
 	init_thread (initial_thread, "main", PRI_DEFAULT);
 	initial_thread->status = THREAD_RUNNING;
 	initial_thread->tid = allocate_tid ();
+	initial_thread->nice = 0;
+	initial_thread->recent_cpu = 0;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -123,6 +137,7 @@ void
 thread_start (void) {
 	/* Create the idle thread. */
 	struct semaphore idle_started;
+	load_avg = 0;
 	sema_init (&idle_started, 0);
 	thread_create ("idle", PRI_MIN, idle, &idle_started);
 
@@ -192,6 +207,11 @@ thread_create (const char *name, int priority,
 	/* Initialize thread. */
 	init_thread (t, name, priority);
 	tid = t->tid = allocate_tid ();
+	if(thread_mlfqs){
+		t->nice = thread_current()->nice;
+		t->recent_cpu = thread_current()->recent_cpu;
+		t->priority = mlfqs_calculate_priority(t);
+	}
 
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
@@ -206,7 +226,7 @@ thread_create (const char *name, int priority,
 
 	/* Add to run queue. */
 	thread_unblock (t);
-
+	thread_check_and_yield();
 	return tid;
 }
 
@@ -240,7 +260,7 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	list_push_back (&ready_list, &t->elem);
+	list_push_back(&ready_list, &t->elem);
 	t->status = THREAD_READY;
 	intr_set_level (old_level);
 }
@@ -288,6 +308,7 @@ thread_exit (void) {
 	/* Just set our status to dying and schedule another process.
 	   We will be destroyed during the call to schedule_tail(). */
 	intr_disable ();
+	list_remove(&thread_current()->total_elem);
 	do_schedule (THREAD_DYING);
 	NOT_REACHED ();
 }
@@ -311,7 +332,15 @@ thread_yield (void) {
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void
 thread_set_priority (int new_priority) {
-	thread_current ()->priority = new_priority;
+	if(thread_mlfqs){
+		return;
+	}
+	if(priority_donate() < new_priority){
+		thread_current ()->priority = new_priority;
+	}
+	thread_current()->actual_priority = new_priority;
+	thread_check_and_yield();
+	// 우선순위 비교하고 자기보다 높은 우선순위 존재시 thread_yeild하기기
 }
 
 /* Returns the current thread's priority. */
@@ -324,27 +353,39 @@ thread_get_priority (void) {
 void
 thread_set_nice (int nice UNUSED) {
 	/* TODO: Your implementation goes here */
+	thread_current()->nice = nice;
+	int value = mlfqs_calculate_priority(thread_current());
+	if(value > PRI_MAX){
+		value = PRI_MAX;
+	}
+	else if(value < PRI_MIN){
+		value = PRI_MIN;
+	}
+	thread_current()->priority = value;
+	thread_check_and_yield();
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	return thread_current()->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	return round2near(fmuln(load_avg, 100));
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) {
 	/* TODO: Your implementation goes here */
-	return 0;
+	int value = round2near(fmuln(thread_current()->recent_cpu, 100));
+	//int value = round2near(fmuln(thread_current()->recent_cpu, 100));
+	return value; 
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -408,6 +449,13 @@ init_thread (struct thread *t, const char *name, int priority) {
 	strlcpy (t->name, name, sizeof t->name);
 	t->tf.rsp = (uint64_t) t + PGSIZE - sizeof (void *);
 	t->priority = priority;
+	t->actual_priority = priority;
+	t->nice = 0;
+	t->recent_cpu = 0;
+	list_push_back(&total_list, &t->total_elem);
+	//여기서 list에 넣어주어야 한다. 왜냐하면 처음 main thread는 thread_create을 통해서가 아닌 init_thread만을 사용?
+	list_init(&t->own_lock);
+	t->waiting_lock = NULL;
 	t->magic = THREAD_MAGIC;
 }
 
@@ -420,8 +468,14 @@ static struct thread *
 next_thread_to_run (void) {
 	if (list_empty (&ready_list))
 		return idle_thread;
-	else
-		return list_entry (list_pop_front (&ready_list), struct thread, elem);
+	else{
+		struct list_elem* target = thread_max_priority_list(&ready_list);
+		list_remove(target);
+		return list_entry (target, struct thread, elem);
+		//return list_entry (list_pop_front (&ready_list), struct thread, elem);
+	}	
+		// 가장 priority 높은 thread 찾아서 그거 return하기
+		//return list_entry (list_pop_front (&ready_list), struct thread, elem);
 }
 
 /* Use iretq to launch the thread */
@@ -587,4 +641,155 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+
+//------------------------------------------------------------------
+//project1: threads
+
+void thread_sleep(int64_t target_ticks){
+	struct thread* cur_thread = thread_current();
+	cur_thread->target_ticks = target_ticks;
+	list_insert_ordered(&waiting_list, &cur_thread->elem, tick_less, NULL);
+	thread_block();
+}
+
+bool tick_less(const struct list_elem *a,
+const struct list_elem *b, void *aux){ 
+	struct thread* ta = list_entry(a, struct thread, elem);
+	struct thread* tb = list_entry(b, struct thread, elem);
+	if(ta->target_ticks < tb->target_ticks){
+		return true;
+	}
+	return false;
+}
+
+bool pri_higher(const struct list_elem *a,
+const struct list_elem *b, void *aux){
+	struct thread* ta = list_entry(a, struct thread, elem);
+	struct thread* tb = list_entry(b, struct thread, elem);
+	if(ta->priority > tb->priority){
+		return true;
+	}
+	return false;
+	}
+
+void thread_wakeup(int64_t current_tick){
+	if(list_empty(&waiting_list)){
+		return;
+	}
+	struct list_elem* iter;
+	struct thread* iter_thread;
+	while(!list_empty(&waiting_list)){
+		iter = list_front(&waiting_list);
+		iter_thread = list_entry(iter, struct thread, elem);
+		if(iter_thread-> target_ticks <= current_tick){
+			list_pop_front(&waiting_list);
+			thread_unblock(iter_thread);
+		}
+		else{
+			break;
+		}
+	}
+}
+
+void
+thread_check_and_yield (void) {
+	struct thread *curr = thread_current ();
+	if(list_empty(&ready_list) == 0){
+		struct thread* target = list_entry(thread_max_priority_list(&ready_list), struct thread, elem);
+		// 이거 대신 ready_list에서 현재 priority가 높은 애를 뽑는 함수를 만들어서 그것으로 구하기
+		//처음에 list_entry를 사용안해서 아래 조건문이 안 들어가졌던 거임.. ㅋㅋ
+		if(target->priority > curr->priority){
+			thread_yield();
+		}
+	}
+}
+
+struct list_elem* thread_max_priority_list(struct list* list){
+	struct list_elem* max_target;
+	int max_pri = -1;
+	struct list_elem* iter;
+	ASSERT (list != NULL);
+
+	for(iter = list_begin(list); iter != list_end(list); iter = list_next(iter)){
+		struct thread* target = list_entry(iter, struct thread, elem);
+		if(target->priority > max_pri){
+			max_target = iter;
+			max_pri = target->priority;
+		}
+	}
+	return max_target;
+}
+// 근데 리스트 당 list_elem 을 어떤것을 사용하는지가 달라질 수 있기 떄문에 조심해야 할듯.
+
+int mlfqs_ready_thread_num(){
+	int num = 0;
+	if(thread_current() != idle_thread){
+		num++;
+	}
+	num = num + list_size(&ready_list);
+	return num;
+}
+
+int mlfqs_calculate_priority(struct thread* t){
+	int integer = PRI_MAX - (t->nice * 2);
+	return (integer - round2near(fdivn(t->recent_cpu, 4)));
+}
+
+int mlfqs_calculate_recent_cpu(struct thread* t){
+	int l = load_avg;
+	return faddn(fmulf(fdivf(fmuln(l, 2), faddn(fmuln(l, 2), 1)), t->recent_cpu), t->nice);
+}
+
+int mlfqs_calculate_load_avg(){
+	int ready_num = mlfqs_ready_thread_num();
+	return fdivn(faddn(fmuln(load_avg, 59), ready_num), 60);
+}
+
+void mlfqs_update_tick(int ticks){
+	//if(thread_current() != idle_thread){
+	int value = faddn(thread_current()->recent_cpu, 1);
+	thread_current()->recent_cpu = value;
+	//}
+	if(ticks % TIMER_FREQ == 0){
+		load_avg = mlfqs_calculate_load_avg();
+		mlfqs_update_all_recent_cpu();
+		//update all the thread's recent_cpu;
+	}
+	if(ticks % 4 == 0){
+		mlfqs_update_all_priority();
+		//thread_check_and_yield();
+		//하면 안된다. interrupt_context일때는 thread_yield를 해서는 안된다.
+	}
+}
+
+void mlfqs_update_all_recent_cpu(){
+	struct list_elem* iter;
+	if(list_empty(&total_list)){
+		return;
+	}
+	for(iter = list_begin(&total_list); iter != list_end(&total_list); iter = list_next(iter)){
+		struct thread* target = list_entry(iter, struct thread, total_elem);
+		int value = mlfqs_calculate_recent_cpu(target);
+		target->recent_cpu = value;
+	}
+}
+
+void mlfqs_update_all_priority(){
+	struct list_elem* iter;
+	if(list_empty(&total_list)){
+		return;
+	}
+	for(iter = list_begin(&total_list); iter != list_end(&total_list); iter = list_next(iter)){
+		struct thread* target = list_entry(iter, struct thread, total_elem);
+		int value = mlfqs_calculate_priority(target);
+		if(value > PRI_MAX){
+			value = PRI_MAX;
+		}
+		else if(value < PRI_MIN){
+			value = PRI_MIN;
+		}
+		target->priority = value;
+	}
 }

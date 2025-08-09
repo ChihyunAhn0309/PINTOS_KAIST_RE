@@ -91,10 +91,10 @@ timer_elapsed (int64_t then) {
 void
 timer_sleep (int64_t ticks) {
 	int64_t start = timer_ticks ();
-
 	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+	enum intr_level old_level = intr_disable ();
+	thread_sleep(start + ticks);
+	intr_set_level (old_level);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -125,6 +125,13 @@ timer_print_stats (void) {
 static void
 timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
+	//여기서 target tick확인하고 깨우기기
+	if(thread_mlfqs){
+		mlfqs_update_tick(ticks);
+	}
+	enum intr_level old_level = intr_disable ();
+	thread_wakeup(ticks);
+	intr_set_level (old_level);
 	thread_tick ();
 }
 

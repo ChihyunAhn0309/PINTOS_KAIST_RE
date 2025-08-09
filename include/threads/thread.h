@@ -90,10 +90,22 @@ struct thread {
 	tid_t tid;                          /* Thread identifier. */
 	enum thread_status status;          /* Thread state. */
 	char name[16];                      /* Name (for debugging purposes). */
-	int priority;                       /* Priority. */
+	int priority;                       /* Donated and effective Priority. */
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem;              /* List element. */
+
+	//project1: threads ------------------
+	int64_t target_ticks;				/* Target tick for wake up */
+	int actual_priority;				/* Actual priority which is not donated priority*/
+	struct list own_lock;				/* List of lock which this thread own */
+	struct lock* waiting_lock;			/* Lock which this thread is waiting for */
+	int nice;
+	int recent_cpu;
+	struct list_elem total_elem;
+
+	// project1 end ---------------------------
+
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -142,5 +154,22 @@ int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
 void do_iret (struct intr_frame *tf);
+
+//project1: threads -------------------------------------
+void thread_sleep(int64_t target_tick);
+bool tick_less(const struct list_elem *a,
+	const struct list_elem *b, void *aux);
+bool pri_higher(const struct list_elem *a,
+	const struct list_elem *b, void *aux);
+void thread_wakeup(int64_t current_tick);
+void thread_check_and_yield (void);
+struct list_elem* thread_max_priority_list(struct list* list);
+int mlfqs_ready_thread_num();
+int mlfqs_calculate_priority(struct thread* t);
+int mlfqs_calculate_recent_cpu(struct thread* t);
+int mlfqs_calculate_load_avg();
+void mlfqs_update_tick(int ticks);
+void mlfqs_update_all_recent_cpu();
+void mlfqs_update_all_priority();
 
 #endif /* threads/thread.h */

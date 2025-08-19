@@ -225,6 +225,11 @@ thread_create (const char *name, int priority,
 	t->tf.eflags = FLAG_IF;
 
 	/* Add to run queue. */
+	t->fd_table = palloc_get_page(PAL_ZERO);
+	if(t->fd_table == NULL){
+		return -1;
+	}
+	list_push_back(&thread_current()->child_list, &t->child_elem);
 	thread_unblock (t);
 	thread_check_and_yield();
 	return tid;
@@ -455,7 +460,15 @@ init_thread (struct thread *t, const char *name, int priority) {
 	list_push_back(&total_list, &t->total_elem);
 	//여기서 list에 넣어주어야 한다. 왜냐하면 처음 main thread는 thread_create을 통해서가 아닌 init_thread만을 사용?
 	list_init(&t->own_lock);
+	list_init(&t->child_list);
+	sema_init(&t->end_sema, 0);
+	sema_init(&t->clean_sema, 0);
+	sema_init(&t->fork_sema, 0);
+	lock_init(&filesys_lock);
+	//memset(t->fd_table, 0 , sizeof(t->fd_table));
+	t->wait = 0;
 	t->waiting_lock = NULL;
+	t->function = NULL;
 	t->magic = THREAD_MAGIC;
 }
 

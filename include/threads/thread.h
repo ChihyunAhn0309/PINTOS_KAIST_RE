@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -104,8 +105,16 @@ struct thread {
 	int recent_cpu;
 	struct list_elem total_elem;
 
-	// project1 end ---------------------------
-
+	// project2: userprog ---------------------------
+	struct file** fd_table;				/* FD table for this thread */
+	int exit_stat;						/* Exit status from exit system call */
+	struct list child_list;				/* list for child threads */
+	struct list_elem child_elem;		/* list elem for child_list */
+	struct semaphore end_sema;			/* semaphore for check whether this thread is exit or not */
+	struct semaphore clean_sema;		/* semaphore for end of the waiting */
+	int wait;							/* There is already wait for this thread exist */
+	struct semaphore fork_sema; 		/* semaphore for forking */
+	struct file* function;				/* Function which run in this thread */
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
@@ -171,5 +180,6 @@ int mlfqs_calculate_load_avg();
 void mlfqs_update_tick(int ticks);
 void mlfqs_update_all_recent_cpu();
 void mlfqs_update_all_priority();
+
 
 #endif /* threads/thread.h */

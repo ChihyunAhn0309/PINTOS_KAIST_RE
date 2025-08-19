@@ -10,4 +10,14 @@ int process_wait (tid_t);
 void process_exit (void);
 void process_activate (struct thread *next);
 
+//----------------------------------------------------------------
+//project2: USERPROG
+void argument_passing(int argc, char** argv, struct intr_frame *if_);
+int find_next_fd(struct thread* target);
+
+struct fork_arg{
+    struct intr_frame* if_;
+    struct thread* parent;
+};
+
 #endif /* userprog/process.h */

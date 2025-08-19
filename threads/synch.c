@@ -120,7 +120,9 @@ sema_up (struct semaphore *sema) {
 	//sema->waiters list에서 가장 priority 높은 애를 찾아서 걔를 unblock시키기
 	sema->value++;
 	intr_set_level (old_level);
-	thread_check_and_yield();
+	if(!intr_context()){
+		thread_check_and_yield();
+	}
 }
 
 static void sema_test_helper (void *sema_);

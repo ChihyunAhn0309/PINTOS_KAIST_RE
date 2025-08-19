@@ -53,4 +53,8 @@ int priority_donate();
 void priority_donate_chain(struct lock* lock);
 struct list_elem* cond_max_priority_list(struct list* list);
 
+//Project2: userprog ----------------------------------------------
+struct lock filesys_lock;
+
+
 #endif /* threads/synch.h */

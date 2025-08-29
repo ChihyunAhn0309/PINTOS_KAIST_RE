@@ -116,6 +116,10 @@ struct thread {
 	struct semaphore fork_sema; 		/* semaphore for forking */
 	struct file* function;				/* Function which run in this thread */
 
+	// project3: vm --------------------------------------------
+	uintptr_t user_rsp;					/* RSP address of user process */
+	uintptr_t stack_bottom;				/* bottom of possible stack */
+
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4;                     /* Page map level 4 */

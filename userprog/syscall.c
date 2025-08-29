@@ -40,12 +40,14 @@ syscall_init (void) {
 	 * mode stack. Therefore, we masked the FLAG_FL. */
 	write_msr(MSR_SYSCALL_MASK,
 			FLAG_IF | FLAG_TF | FLAG_DF | FLAG_IOPL | FLAG_AC | FLAG_NT);
+	lock_init(&filesys_lock);
 }
 
 /* The main system call interface */
 void
 syscall_handler (struct intr_frame *f UNUSED) {
 	// TODO: Your implementation goes here.
+	thread_current()->user_rsp = f->rsp;
 	int syscall_num = f->R.rax;
 	uint64_t arg1 = f->R.rdi;
 	uint64_t arg2 = f->R.rsi;
@@ -157,6 +159,58 @@ syscall_handler (struct intr_frame *f UNUSED) {
 		lock_release(&filesys_lock);
 		break;
 	}
+	#ifdef VM
+	case SYS_MMAP:{
+		void* addr = (void*)arg1;
+		size_t length = (size_t)arg2;
+		int writable = (int)arg3;
+		int fd = (int)arg4;
+		off_t offset = (off_t)arg5;
+		if(offset % PGSIZE != 0){
+			goto error;
+		}
+		if(is_valid_fd(fd) != 2){
+			goto error;
+		}
+		struct file* file = thread_current()->fd_table[fd];
+		if(file_length(file) == 0){
+			goto error;
+		}
+		if(addr != pg_round_down(addr)){
+			goto error;
+		}
+
+		if(addr != NULL){
+			for(int i = 0; i <= length; i++){
+				if(!is_user_vaddr(addr+i)){
+					goto error;
+				}
+			}
+			void* test_addr = addr;
+			while(test_addr < addr + length){
+				void* kva = pml4_get_page(thread_current()->pml4, test_addr);
+				if(kva != NULL){
+					goto error;
+				}
+				test_addr += PGSIZE;
+			}
+		}
+		if(addr == 0 || length <= 0){
+			goto error;
+		}
+		void* ret_addr = do_mmap(addr, length, writable, file, offset);
+		f->R.rax = ret_addr;
+		break;
+	error:
+		f->R.rax = NULL;
+		break;
+	}
+	case SYS_MUNMAP:{
+		void* addr = (void*)arg1;
+		do_munmap(addr);
+		break;
+	}
+	#endif
 	default:{
 		printf ("system call!\n");
 		thread_exit ();
@@ -168,6 +222,7 @@ syscall_handler (struct intr_frame *f UNUSED) {
 //------------------------------------------------------------------------
 //project2: USERPROG
 
+#ifndef VM
 bool is_valid_addr(void* vaddr){
 	if(!is_user_vaddr(vaddr) || vaddr == NULL || pml4_get_page(thread_current()->pml4, vaddr) == NULL){
 		return false;
@@ -175,6 +230,14 @@ bool is_valid_addr(void* vaddr){
 	return true;
 }
 //pml4_get_page 매우 중요!!
+#else
+bool is_valid_addr(void* vaddr){
+	if(!is_user_vaddr(vaddr) || vaddr == NULL || spt_find_page(&thread_current()->spt, vaddr) == NULL){
+		return false;
+	}
+	return true;
+}
+#endif
 
 bool is_valid_buffer(void* buffer, unsigned length){
 	for(int i = 0; i < length; i++){
@@ -265,6 +328,7 @@ int wait_handler (pid_t pid){
 
 bool create_handler (const char *file, unsigned initial_size){
 	if(!is_valid_addr(file)){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 	}
 	bool success = filesys_create(file, initial_size);
@@ -282,6 +346,7 @@ int open_handler (const char *file){
 		return -1;
 	}
 	if(!is_valid_addr(file)){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 	}
 	struct file* target = filesys_open(file);
@@ -294,6 +359,7 @@ int open_handler (const char *file){
 
 int filesize_handler (int fd){
 	if(is_valid_fd(fd) != 2){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 	}
 	int size = file_length(thread_current()->fd_table[fd]);
@@ -302,6 +368,7 @@ int filesize_handler (int fd){
 
 int read_handler (int fd, void *buffer, unsigned length){
 	if(!is_valid_buffer(buffer, length)){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 		//원래 설명상은 return -1임.
 	}
@@ -317,12 +384,20 @@ int read_handler (int fd, void *buffer, unsigned length){
 		return -1;
 		//원래 설명상은 return -1임.
 	}
+	#ifdef VM
+	struct page* buf_page = spt_find_page(&thread_current()->spt, buffer);
+	if(buf_page != NULL && buf_page->rw == false){
+		lock_release(&filesys_lock);
+		exit_handler(-1);
+	}
+	#endif
 	int read_byte = file_read(thread_current()->fd_table[fd], buffer, length);
 	return read_byte;
 }
 
 int write_handler (int fd, const void *buffer, unsigned length){
 	if(!is_valid_buffer(buffer, length)){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 		//원래 설명상은 return -1임.
 	}
@@ -340,21 +415,18 @@ int write_handler (int fd, const void *buffer, unsigned length){
 
 void seek_handler (int fd, unsigned position){
 	if(is_valid_fd(fd) != 2){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 	}
 	struct file* target = thread_current()->fd_table[fd];
 	int size = file_length(target);
-	if(size < position){
-		file_seek(target, size);
-	}
-	else{
-		file_seek(target, position);
-	}
+	file_seek(target, position);
 	return;
 }
 
 unsigned tell_handler (int fd){
 	if(is_valid_fd(fd) != 2){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 	}
 	struct file* target = thread_current()->fd_table[fd];
@@ -364,6 +436,7 @@ unsigned tell_handler (int fd){
 
 void close_handler (int fd){
 	if(is_valid_fd(fd) != 2){
+		lock_release(&filesys_lock);
 		exit_handler(-1);
 	}
 	struct file* target = thread_current()->fd_table[fd];

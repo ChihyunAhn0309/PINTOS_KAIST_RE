@@ -161,6 +161,7 @@ pt_destroy (uint64_t *pt) {
 		uint64_t *pte = ptov((uint64_t *) pt[i]);
 		if (((uint64_t) pte) & PTE_P)
 			palloc_free_page ((void *) PTE_ADDR (pte));
+		//여기서 실제 frame까지 해제 따라서 page destroy에서 해제하지 말기
 	}
 	palloc_free_page ((void *) pt);
 }

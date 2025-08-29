@@ -2,6 +2,8 @@
 #define VM_VM_H
 #include <stdbool.h>
 #include "threads/palloc.h"
+#include "hash.h"
+#include "devices/disk.h"
 
 enum vm_type {
 	/* page not initialized */
@@ -17,7 +19,7 @@ enum vm_type {
 
 	/* Auxillary bit flag marker for store information. You can add more
 	 * markers, until the value is fit in the int. */
-	VM_MARKER_0 = (1 << 3),
+	VM_STACK = (1 << 3),
 	VM_MARKER_1 = (1 << 4),
 
 	/* DO NOT EXCEED THIS VALUE. */
@@ -35,7 +37,7 @@ struct page_operations;
 struct thread;
 
 #define VM_TYPE(type) ((type) & 7)
-
+#define SECTORS_PER_PAGE (PGSIZE/DISK_SECTOR_SIZE)
 /* The representation of "page".
  * This is kind of "parent class", which has four "child class"es, which are
  * uninit_page, file_page, anon_page, and page cache (project4).
@@ -46,7 +48,9 @@ struct page {
 	struct frame *frame;   /* Back reference for frame */
 
 	/* Your implementation */
-
+	struct hash_elem hash_elem;
+	bool rw;
+	struct thread* owner;	/* The thread which is having this page */
 	/* Per-type data are binded into the union.
 	 * Each function automatically detects the current union */
 	union {
@@ -59,10 +63,15 @@ struct page {
 	};
 };
 
+struct list_elem* iter_pos;
+struct list frame_table;
+struct bitmap* swap_table;
+
 /* The representation of "frame" */
 struct frame {
 	void *kva;
 	struct page *page;
+	struct list_elem frame_elem;
 };
 
 /* The function table for page operations.
@@ -85,6 +94,7 @@ struct page_operations {
  * We don't want to force you to obey any specific design for this struct.
  * All designs up to you for this. */
 struct supplemental_page_table {
+	struct hash spt_hash;
 };
 
 #include "threads/thread.h"
@@ -107,6 +117,15 @@ bool vm_alloc_page_with_initializer (enum vm_type type, void *upage,
 		bool writable, vm_initializer *init, void *aux);
 void vm_dealloc_page (struct page *page);
 bool vm_claim_page (void *va);
+bool vm_do_claim_page (struct page *page);
 enum vm_type page_get_type (struct page *page);
+
+//project3: vm ---------------------------------------------------------
+
+unsigned spt_hash_func(const struct hash_elem* e, void* aux);
+bool spt_hash_less(const struct hash_elem* a, const struct hash_elem* b, void* aux);
+void spt_clear_func(struct hash_elem* e, void* aux);
+
+
 
 #endif  /* VM_VM_H */

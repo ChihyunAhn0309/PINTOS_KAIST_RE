@@ -2,6 +2,7 @@
 #define USERPROG_PROCESS_H
 
 #include "threads/thread.h"
+#include "filesys/off_t.h"
 
 tid_t process_create_initd (const char *file_name);
 tid_t process_fork (const char *name, struct intr_frame *if_);
@@ -18,6 +19,16 @@ int find_next_fd(struct thread* target);
 struct fork_arg{
     struct intr_frame* if_;
     struct thread* parent;
+};
+
+//project3: vm ----------------------------------------------------
+bool lazy_load_segment (struct page *page, void *aux);
+
+struct load_arg{
+    struct file* file;
+    size_t read_bytes;
+    size_t zero_bytes;
+    off_t offs;
 };
 
 #endif /* userprog/process.h */

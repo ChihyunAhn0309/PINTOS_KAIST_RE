@@ -1,0 +1,23 @@
+Kernel command line: -q -f put args-single run 'args-single onearg'
+0 ~ 9fc00 1
+100000 ~ 13e0000 1
+Pintos booting with: 
+	base_mem: 0x0 ~ 0x9fc00 (Usable: 639 kB)
+	ext_mem: 0x100000 ~ 0x13e0000 (Usable: 19,328 kB)
+Calibrating timer...  419,020,800 loops/s.
+hd0:0: detected 345 sector (172 kB) disk, model "QEMU HARDDISK", serial "QM00001"
+hd0:1: detected 20,160 sector (9 MB) disk, model "QEMU HARDDISK", serial "QM00002"
+hd1:0: detected 102 sector (51 kB) disk, model "QEMU HARDDISK", serial "QM00003"
+hd1:1: detected 8,064 sector (3 MB) disk, model "QEMU HARDDISK", serial "QM00004"
+Formatting file system...done.
+Boot complete.
+Putting 'args-single' into the file system...
+main: exit(-1)
+main: exit(-1)
+main: exit(-1)
+main: exit(-1)
+main: exit(-Kernel PANIC at ../../threads/thread.c:291 in thread_current(): assertion `is_thread (t)' failed.
+Call stack: 0x800421448c 0x80042072e8 0x800420ad39 0x8004217791 0x800421795e 0x8004217942 0x8004212884 0x8004211cda 0x80042177f1 0x800421198f 0x8004219eb7 0x80042193b5 0x8004209503 0x8004209921 0x80042073ae 0x8004219ec3 0x80042193b5 0x8004209503 0x8004209921 0x80042073ae 0x8004219ec3 0x80042193b5 0x8004209503 0x8004209921 0x80042073ae 0x8004219ec3 0x80042193b5 0x8004209503 0x8004209921 0x80042073ae 0x8004219ec3 0x80042193b5 0x8004209503 0x8004209921 0x800421b6ea 0x800421b60f 0x800421ca71 0x800421ab32 0x800421d6e1 0x80042068cc 0x8004206186.
+The `backtrace' program can make call stacks useful.
+Read "Backtraces" in the "Debugging Tools" chapter
+of the Pintos documentation for more information.

@@ -47,6 +47,7 @@ process_create_initd (const char *file_name) {
 	/* Make a copy of FILE_NAME.
 	 * Otherwise there's a race between the caller and load(). */
 	fn_copy = palloc_get_page (0);
+	//fn_copy = palloc_get_page (PAL_USER | PAL_ZERO);
 	if (fn_copy == NULL)
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
@@ -264,7 +265,6 @@ process_wait (tid_t child_tid UNUSED) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
-	sema_up(&curr->end_sema);
 
 	for(int i = 0; i <= 128; i++){
 		if(thread_current()->fd_table[i] != NULL){
@@ -278,8 +278,6 @@ process_exit (void) {
 
 	// 완벽하게 fork가 되었을 때 가능한 fd_table과 해당 thread의 function 닫아주기기
 
-	sema_down(&curr->clean_sema);
-
 	if(!list_empty(&curr->own_lock)){
 		for(struct list_elem* iter = list_begin(&curr->own_lock); iter!= list_end(&curr->own_lock); iter = list_next(iter)){
 			struct lock* target = list_entry(iter, struct lock, lock_elem);
@@ -289,8 +287,11 @@ process_exit (void) {
 	if(curr->waiting_lock != NULL){
 		list_remove(&curr->waiting_lock->lock_elem);
 	}
-	palloc_free_page(curr->fd_table);
 	process_cleanup ();
+	sema_up(&curr->end_sema);
+	sema_down(&curr->clean_sema);
+	palloc_free_page(curr->fd_table);
+	// 여기 process_cleanup과 sema_down 순서가 exit 통과 fail 결정
 	
 	// 진짜 fork가 완벽하게 되지 않았더라도 thread create를 통해서 만들어진 것들 정리 
 }
@@ -424,7 +425,6 @@ load (const char *file_name, struct intr_frame *if_) {
 	}
 	lock_acquire(&filesys_lock);
 	file = filesys_open (argv[0]);
-	lock_release(&filesys_lock);
 	if (file == NULL) {
 		printf ("load: %s: open failed\n", argv[0]);
 		goto done;
@@ -508,13 +508,16 @@ load (const char *file_name, struct intr_frame *if_) {
 	thread_current()->function = file;
 	file_deny_write(file);
 	success = true;
+	lock_release(&filesys_lock);
 	return success;
 
 done:
 	/* We arrive here whether the load is successful or not. */
 	file_close (file);
+	lock_release(&filesys_lock);
 	return success;
 }
+//file관련 작업 다 끝나고 마지막에 lock_relase해줘야 한다.
 
 
 /* Checks whether PHDR describes a valid, loadable segment in
@@ -665,11 +668,28 @@ install_page (void *upage, void *kpage, bool writable) {
  * If you want to implement the function for only project 2, implement it on the
  * upper block. */
 
-static bool
+bool
 lazy_load_segment (struct page *page, void *aux) {
 	/* TODO: Load the segment from the file */
 	/* TODO: This called when the first page fault occurs on address VA. */
 	/* TODO: VA is available when calling this function. */
+	struct load_arg* load_aux = (struct load_arg*)aux;
+	struct file* file = load_aux->file;
+	size_t page_read_bytes = load_aux->read_bytes;
+	size_t page_zero_bytes = load_aux->zero_bytes;
+	off_t ofs = load_aux->offs;
+	uint8_t *upage = page->va;
+	file_seek (file, ofs);
+	/* Load this page. */
+	void* kva = page->frame->kva;
+	//여기서 page에 해당하는 frame의 kva 사용이 중요.
+	off_t readb = file_read (file, kva, page_read_bytes);
+	if (readb != (int) page_read_bytes) {
+		palloc_free_page (kva);
+		return false;
+	}
+	memset (kva + page_read_bytes, 0, page_zero_bytes);
+	return true;
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
@@ -692,23 +712,28 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 	ASSERT ((read_bytes + zero_bytes) % PGSIZE == 0);
 	ASSERT (pg_ofs (upage) == 0);
 	ASSERT (ofs % PGSIZE == 0);
-
+	off_t offs = ofs;
 	while (read_bytes > 0 || zero_bytes > 0) {
 		/* Do calculate how to fill this page.
 		 * We will read PAGE_READ_BYTES bytes from FILE
 		 * and zero the final PAGE_ZERO_BYTES bytes. */
 		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
 		size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
 		/* TODO: Set up aux to pass information to the lazy_load_segment. */
-		void *aux = NULL;
+		struct load_arg* aux = (struct load_arg*)malloc(sizeof(struct load_arg));
+		aux->file = file;
+		aux->read_bytes = page_read_bytes;
+		aux->zero_bytes = page_zero_bytes;
+		aux->offs = offs;
 		if (!vm_alloc_page_with_initializer (VM_ANON, upage,
-					writable, lazy_load_segment, aux))
+					writable, lazy_load_segment, (void*)aux)){
+			free(aux);
 			return false;
-
+		}
 		/* Advance. */
 		read_bytes -= page_read_bytes;
 		zero_bytes -= page_zero_bytes;
+		offs += page_read_bytes;
 		upage += PGSIZE;
 	}
 	return true;
@@ -724,9 +749,19 @@ setup_stack (struct intr_frame *if_) {
 	 * TODO: If success, set the rsp accordingly.
 	 * TODO: You should mark the page is stack. */
 	/* TODO: Your code goes here */
-
+	success = vm_alloc_page(VM_ANON | VM_STACK, stack_bottom, true);
+	if(success == false){
+		return false;
+	}
+	success = vm_claim_page(stack_bottom);
+	if(success == false){
+		return false;
+	}
+	if_->rsp = USER_STACK;
+	thread_current()->stack_bottom = stack_bottom;
 	return success;
 }
+//stack bottom으로 하는 것이 존나 중요..*** 이거 없으면 바로 오류
 #endif /* VM */
 
 //-------------------------------------------------------------------

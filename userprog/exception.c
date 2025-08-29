@@ -147,9 +147,7 @@ page_fault (struct intr_frame *f) {
 		return;
 #endif
 
-	if(user){
-		exit_handler(-1);
-	}
+	exit_handler(-1);
 
 	/* Count page faults. */
 	page_fault_cnt++;

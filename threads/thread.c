@@ -212,7 +212,7 @@ thread_create (const char *name, int priority,
 		t->recent_cpu = thread_current()->recent_cpu;
 		t->priority = mlfqs_calculate_priority(t);
 	}
-
+	t->user_rsp = thread_current()->user_rsp;
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
 	t->tf.rip = (uintptr_t) kernel_thread;
@@ -464,7 +464,6 @@ init_thread (struct thread *t, const char *name, int priority) {
 	sema_init(&t->end_sema, 0);
 	sema_init(&t->clean_sema, 0);
 	sema_init(&t->fork_sema, 0);
-	lock_init(&filesys_lock);
 	//memset(t->fd_table, 0 , sizeof(t->fd_table));
 	t->wait = 0;
 	t->waiting_lock = NULL;
@@ -724,7 +723,10 @@ struct list_elem* thread_max_priority_list(struct list* list){
 	int max_pri = -1;
 	struct list_elem* iter;
 	ASSERT (list != NULL);
-
+	if(list_empty(list)){
+		return NULL;
+	}
+	//이거 뺴먹었음...
 	for(iter = list_begin(list); iter != list_end(list); iter = list_next(iter)){
 		struct thread* target = list_entry(iter, struct thread, elem);
 		if(target->priority > max_pri){
